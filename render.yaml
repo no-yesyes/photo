@@ -1,0 +1,19 @@
+﻿services:
+  - type: web
+    name: widecanvas
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: IMAGE_API_BASE
+        value: https://api.openai.com/v1
+      - key: IMAGE_MODEL
+        value: gpt-image-1
+      - key: IMAGE_SIZE
+        value: 1536x1024
+      - key: IMAGE_API_KEY
+        sync: false

@@ -48,19 +48,24 @@ def stitch(panels,boxes,w,h):
  return Image.fromarray((acc/np.maximum(den[:,:,None],1e-6)).clip(0,255).astype('uint8'),'RGB')
 def build_prompt(prompt,i,n):
  pos='左侧' if i==0 else '右侧' if i==n-1 else '中间'; return f'{prompt}\n生成横向超宽全景图的{pos}延展段（第 {i+1}/{n} 段）。与同一全景严格保持主体、风格、色彩、光线、地平线和视角一致；边缘自然延续，重要主体放在中部；不要文字、边框、分格或拼贴。'
+def render_wide(prompt,width,height,demo=False,on_progress=None):
+ boxes=panel_boxes(width,height); panels=[]
+ for i,b in enumerate(boxes):
+  if on_progress: on_progress(i,len(boxes))
+  pw=b[2]-b[0]; panel=demo_panel(prompt,pw,height,b[0]) if demo else call_image_api(build_prompt(prompt,i,len(boxes)),os.environ.get('IMAGE_SIZE','1536x1024')); panels.append(panel)
+ return stitch(panels,boxes,width,height)
 def generate(tid,req):
  try:
   w,h=int(req['width']),int(req['height'])
   if w<256 or h<128 or w>16384 or h>4096 or not 3.01<=w/h<=20: raise ValueError('尺寸范围：宽 256–16384、高 128–4096，比例需大于 3:1 且不超过 20:1。')
   prompt=str(req.get('prompt','')).strip()[:2000]
   if not prompt: raise ValueError('请输入画面提示词。')
-  boxes=panel_boxes(w,h); panels=[]
-  for i,b in enumerate(boxes):
-   with LOCK: TASKS[tid].update(progress=round(i/len(boxes)*78),status=f'生成第 {i+1}/{len(boxes)} 段')
-   pw=b[2]-b[0]; panel=demo_panel(prompt,pw,h,b[0]) if req.get('demo') else call_image_api(build_prompt(prompt,i,len(boxes)),os.environ.get('IMAGE_SIZE','1536x1024')); panels.append(panel)
+  def progress(done,total):
+   with LOCK: TASKS[tid].update(progress=round(done/total*78),status=f'生成第 {done+1}/{total} 段')
+  result=render_wide(prompt,w,h,demo=bool(req.get('demo')),on_progress=progress)
   with LOCK: TASKS[tid].update(progress=84,status='羽化融合重叠区域')
-  result=stitch(panels,boxes,w,h); name=f'{tid}.png'; result.save(OUT/name,format='PNG',optimize=True)
-  with LOCK: TASKS[tid].update(progress=100,status='生成完成',done=True,image=f'/outputs/{name}',width=w,height=h,ratio=round(w/h,2),panels=len(boxes),demo=bool(req.get('demo')))
+  name=f'{tid}.png'; result.save(OUT/name,format='PNG',optimize=True)
+  with LOCK: TASKS[tid].update(progress=100,status='生成完成',done=True,image=f'/outputs/{name}',width=w,height=h,ratio=round(w/h,2),panels=len(panel_boxes(w,h)),demo=bool(req.get('demo')))
  except Exception as e:
   with LOCK: TASKS[tid].update(done=True,error=str(e),status='生成失败')
 class Handler(BaseHTTPRequestHandler):
@@ -73,6 +78,7 @@ class Handler(BaseHTTPRequestHandler):
   self.send_response(200); self.send_header('Content-Type',mimetypes.guess_type(str(path))[0] or 'application/octet-stream'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
  def do_GET(self):
   path=self.path.split('?',1)[0]
+  if path=='/api/health': return self.json_response({'status':'ok','api_configured':bool(os.environ.get('IMAGE_API_KEY'))})
   if path.startswith('/api/tasks/'):
    with LOCK: task=TASKS.get(path.rsplit('/',1)[-1]); task=dict(task) if task else None
    return self.json_response(task or {'error':'任务不存在'},200 if task else 404)
@@ -88,5 +94,5 @@ class Handler(BaseHTTPRequestHandler):
   with LOCK: TASKS[tid]={'progress':0,'status':'任务已排队','done':False}
   threading.Thread(target=generate,args=(tid,req),daemon=True).start(); return self.json_response({'task_id':tid},202)
 def main():
- load_env(); host=os.environ.get('HOST','127.0.0.1'); port=int(os.environ.get('PORT','8000')); print(f'WideCanvas running at http://{host}:{port}'); ThreadingHTTPServer((host,port),Handler).serve_forever()
+ load_env(); host=os.environ.get('HOST','0.0.0.0'); port=int(os.environ.get('PORT','8000')); print(f'WideCanvas running at http://{host}:{port}'); ThreadingHTTPServer((host,port),Handler).serve_forever()
 if __name__=='__main__': main()
